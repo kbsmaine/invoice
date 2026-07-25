@@ -4,6 +4,6 @@
   NEVER paste a service_role key here.
 */
 window.VERVE_INVOICE_CONFIG = {
-  SUPABASE_URL: 'PASTE_YOUR_SUPABASE_PROJECT_URL_HERE',
-  SUPABASE_PUBLISHABLE_KEY: 'PASTE_YOUR_SUPABASE_PUBLISHABLE_OR_ANON_KEY_HERE'
+  SUPABASE_URL: 'https://fkvwilwijerlabofjmsf.supabase.co',
+  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_LbchC9MBiXWMeSVRXdA4jw_YmaPbOhb'
 };
