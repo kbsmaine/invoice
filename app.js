@@ -875,7 +875,7 @@
   });
 
   (async function boot() {
-    if (!isConfigured || !supabaseClient) {
+    if (!isConfigured) {
       state.booting=false;
       render();
       return;
