@@ -7,6 +7,8 @@
   const configuredKey = String(config.SUPABASE_PUBLISHABLE_KEY || config.SUPABASE_ANON_KEY || '').trim();
   const hasPlaceholders = !configuredUrl || !configuredKey || configuredUrl.includes('PASTE_') || configuredKey.includes('PASTE_');
   const isConfigured = !hasPlaceholders && /^https:\/\/.+/i.test(configuredUrl);
+  const planName = String(config.PLAN_NAME || 'Pro');
+  const planPrice = Number(config.PLAN_PRICE_DOLLARS || 19);
   let supabaseClient = null;
   let supabaseLibraryError = '';
 
@@ -141,7 +143,6 @@
       invoice_prefix: profile.invoicePrefix || 'INV-',
       next_number: Number(profile.nextNumber || 1001),
       payment_terms: profile.paymentTerms || '',
-      updated_at: new Date().toISOString(),
     };
   }
 
@@ -218,29 +219,63 @@
     if (result.error) throw result.error;
     if (result.data) return result.data;
     const fallback = defaultProfile(user);
-    result = await supabaseClient.from('profiles').upsert(profileToRow(fallback, user.id)).select().single();
+    result = await supabaseClient.from('profiles').insert(profileToRow(fallback, user.id)).select().single();
     if (result.error) throw result.error;
     return result.data;
   }
 
   async function loadAccount(user) {
     const profileRow = await ensureProfile(user);
-    const [clientsResult, invoicesResult] = await Promise.all([
-      supabaseClient.from('clients').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-      supabaseClient.from('invoices').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-    ]);
-    if (clientsResult.error) throw clientsResult.error;
-    if (invoicesResult.error) throw invoicesResult.error;
     const profile = profileFromRow(profileRow, user);
+    const subscriptionStatus = String(profileRow.subscription_status || 'inactive');
+    const periodEnd = profileRow.subscription_current_period_end || null;
+    const isAdmin = Boolean(profileRow.is_admin);
+    const statusAllowsAccess = ['active', 'trialing'].includes(subscriptionStatus);
+    const periodAllowsAccess = !periodEnd || new Date(periodEnd).getTime() > Date.now();
+    const hasAccess = isAdmin || (statusAllowsAccess && periodAllowsAccess);
+
+    let clients = [];
+    let invoices = [];
+    if (hasAccess) {
+      const [clientsResult, invoicesResult] = await Promise.all([
+        supabaseClient.from('clients').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabaseClient.from('invoices').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+      ]);
+      if (clientsResult.error) throw clientsResult.error;
+      if (invoicesResult.error) throw invoicesResult.error;
+      clients = (clientsResult.data || []).map(clientFromRow);
+      invoices = (invoicesResult.data || []).map(invoiceFromRow);
+    }
+
     return {
       id: user.id,
       name: profile.contactName || user.user_metadata?.full_name || 'Account owner',
       email: user.email || profile.email,
       plan: profileRow.plan || 'pro',
       profile,
-      clients: (clientsResult.data || []).map(clientFromRow),
-      invoices: (invoicesResult.data || []).map(invoiceFromRow),
+      clients,
+      invoices,
+      hasAccess,
+      isAdmin,
+      subscriptionStatus,
+      subscriptionPeriodEnd: periodEnd,
+      stripeCustomerId: profileRow.stripe_customer_id || '',
     };
+  }
+
+  async function reloadAccount() {
+    const { data, error } = await supabaseClient.auth.getUser();
+    if (error) throw error;
+    if (!data.user) throw new Error('Your login session expired. Please log in again.');
+    state.account = await loadAccount(data.user);
+    return state.account;
+  }
+
+  async function openBillingSession(functionName) {
+    const { data, error } = await supabaseClient.functions.invoke(functionName, { body: {} });
+    if (error) throw error;
+    if (!data?.url) throw new Error('The billing service did not return a checkout link.');
+    window.location.assign(data.url);
   }
 
   async function saveClientRemote(client) {
@@ -274,9 +309,12 @@
   }
 
   async function saveProfileRemote(profile) {
+    const payload = profileToRow(profile, state.account.id);
+    delete payload.id;
     const { data, error } = await supabaseClient
       .from('profiles')
-      .upsert(profileToRow(profile, state.account.id))
+      .update(payload)
+      .eq('id', state.account.id)
       .select()
       .single();
     if (error) throw error;
@@ -288,6 +326,7 @@
     if (/duplicate key|unique constraint/i.test(message)) return 'That invoice number is already in use.';
     if (/invalid login credentials/i.test(message)) return 'Incorrect email or password.';
     if (/email not confirmed/i.test(message)) return 'Confirm your email address before logging in.';
+    if (/row-level security|violates row-level security|permission denied/i.test(message)) return 'An active subscription is required for that action.';
     if (/failed to fetch|network/i.test(message)) return 'Could not reach the database. Check your internet connection and Supabase settings.';
     return message;
   }
@@ -335,6 +374,7 @@
       return;
     }
     if (!state.account) app.innerHTML = renderMarketing() + renderModal();
+    else if (!state.account.hasAccess) app.innerHTML = renderPaywall() + renderModal();
     else app.innerHTML = renderShell() + renderModal() + '<div class="demo-badge cloud-badge">Cloud database connected</div>';
   }
 
@@ -357,7 +397,7 @@
           <div class="nav-links"><a href="#features">Features</a><a href="#pricing">Pricing</a><a href="#about">How it works</a></div>
           <div class="nav-actions">
             <button class="btn btn-outline" data-action="open-auth" data-mode="login">Log in</button>
-            <button class="btn btn-primary" data-action="open-auth" data-mode="signup">Start free</button>
+            <button class="btn btn-primary" data-action="open-auth" data-mode="signup">Create account</button>
           </div>
         </nav>
 
@@ -370,7 +410,7 @@
               <button class="btn btn-primary" data-action="open-auth" data-mode="signup">Create your account →</button>
               <button class="btn btn-outline" data-action="open-auth" data-mode="login">Log in securely</button>
             </div>
-            <div class="trust-row"><span>No credit card</span><span>Works on phones</span><span>PDF invoices</span></div>
+            <div class="trust-row"><span>Secure Stripe checkout</span><span>Works on phones</span><span>PDF invoices</span></div>
           </div>
           <div class="hero-window" aria-hidden="true">
             <div class="window-bar"><i class="window-dot"></i><i class="window-dot"></i><i class="window-dot"></i></div>
@@ -398,11 +438,9 @@
         </section>
 
         <section id="pricing" class="marketing-section" style="padding-top:15px">
-          <div class="section-head"><span class="kicker">Simple pricing</span><h2>A plan for every business</h2><p>These prices are editable in the source before you launch it for your customers.</p></div>
-          <div class="pricing-grid">
-            ${priceCard('Starter', 9, ['25 invoices each month', 'Unlimited clients', 'PDF downloads', 'Email support'], false)}
-            ${priceCard('Pro', 19, ['Unlimited invoices', 'Custom branding', 'Payment tracking', 'Priority support'], true)}
-            ${priceCard('Agency', 49, ['Everything in Pro', 'Multiple business profiles', 'Team access', 'White-label options'], false)}
+          <div class="section-head"><span class="kicker">Simple pricing</span><h2>A plan for every business</h2><p>Create an account, then continue to secure Stripe Checkout.</p></div>
+          <div class="pricing-grid single-plan">
+            ${priceCard(planName, planPrice, ['Unlimited invoices', 'Unlimited clients', 'PDF downloads', 'Custom branding'], true)}
           </div>
         </section>
 
@@ -418,7 +456,7 @@
   }
 
   function priceCard(name, price, features, featured) {
-    return `<article class="price-card ${featured ? 'featured' : ''}">${featured ? '<span class="popular">MOST POPULAR</span>' : ''}<h3>${name}</h3><div class="price">$${price}<small>/month</small></div><p class="help">For ${name === 'Starter' ? 'new businesses' : name === 'Pro' ? 'growing companies' : 'teams and resellers'}.</p><ul>${features.map(f => `<li>${f}</li>`).join('')}</ul><button class="btn ${featured ? 'btn-primary' : ''}" style="width:100%" data-action="open-auth" data-mode="signup">Start free</button></article>`;
+    return `<article class="price-card ${featured ? 'featured' : ''}">${featured ? '<span class="popular">MOST POPULAR</span>' : ''}<h3>${name}</h3><div class="price">$${price}<small>/month</small></div><p class="help">For ${name === 'Starter' ? 'new businesses' : name === 'Pro' ? 'growing companies' : 'teams and resellers'}.</p><ul>${features.map(f => `<li>${f}</li>`).join('')}</ul><button class="btn ${featured ? 'btn-primary' : ''}" style="width:100%" data-action="open-auth" data-mode="signup">Create account</button></article>`;
   }
 
   function renderModal() {
@@ -433,7 +471,7 @@
     const signup = state.authMode === 'signup';
     return `<div class="modal-backdrop" data-action="close-modal-self">
       <div class="modal" role="dialog" aria-modal="true">
-        <div class="modal-head"><div style="text-align:center;width:100%"><div class="brand-mark auth-logo">V</div><h2>${signup ? 'Create your account' : 'Welcome back'}</h2><p>${signup ? 'Start creating professional invoices.' : 'Log in to your invoice dashboard.'}</p></div><button class="close-btn" data-action="close-modal">×</button></div>
+        <div class="modal-head"><div style="text-align:center;width:100%"><div class="brand-mark auth-logo">V</div><h2>${signup ? 'Create your account' : 'Welcome back'}</h2><p>${signup ? 'Create your login, then activate your subscription.' : 'Log in to your invoice dashboard.'}</p></div><button class="close-btn" data-action="close-modal">×</button></div>
         <div class="modal-body">
           <div class="auth-tabs"><button class="auth-tab ${!signup ? 'active' : ''}" data-action="auth-tab" data-mode="login">Log in</button><button class="auth-tab ${signup ? 'active' : ''}" data-action="auth-tab" data-mode="signup">Sign up</button></div>
           ${(error || state.authError) ? `<div class="auth-error">${esc(error || state.authError)}</div>` : ''}
@@ -447,6 +485,31 @@
         </div>
       </div>
     </div>`;
+  }
+
+  function renderPaywall() {
+    const account = state.account;
+    const status = account.subscriptionStatus || 'inactive';
+    const returnedFromCheckout = new URLSearchParams(window.location.search).get('checkout') === 'success';
+    const statusMessage = returnedFromCheckout
+      ? '<div class="billing-notice success"><strong>Payment submitted.</strong> Stripe may take a few seconds to confirm it. Use Refresh access below.</div>'
+      : '';
+    const manageButton = account.stripeCustomerId
+      ? '<button class="btn" data-action="manage-billing">Manage billing</button>'
+      : '';
+    return `<main class="paywall-page">
+      <nav class="paywall-nav"><div class="brand"><span class="brand-mark">V</span><span>Verve Invoice</span></div><button class="btn btn-outline" data-action="logout">Log out</button></nav>
+      <section class="paywall-card">
+        <span class="eyebrow">Subscription required</span>
+        <h1>Activate Verve Invoice</h1>
+        <p>Your account is secure, but invoice tools remain locked until the subscription is active.</p>
+        ${statusMessage}
+        <div class="paywall-plan"><div><h2>${esc(planName)} plan</h2><p>Unlimited invoices, clients, PDF exports, and custom branding.</p></div><div class="paywall-price">${money(planPrice)}<small>/month</small></div></div>
+        <ul class="paywall-features"><li>Unlimited invoices</li><li>Unlimited customer records</li><li>Print and PDF exports</li><li>Secure cloud storage</li></ul>
+        <div class="paywall-actions"><button class="btn btn-primary" data-action="start-checkout">Subscribe with Stripe →</button>${manageButton}<button class="btn" data-action="refresh-access">Refresh access</button></div>
+        <p class="help">Billing status: <strong>${esc(status)}</strong>. Signed in as ${esc(account.email)}.</p>
+      </section>
+    </main>`;
   }
 
   function renderShell() {
@@ -625,7 +688,12 @@
   }
 
   function renderBilling() {
-    return `<div class="page-head"><div><h2>Billing</h2><p>Connect this page to Stripe before launching subscriptions.</p></div></div><div class="card" style="max-width:760px"><div class="card-head"><h3>Current plan</h3><span class="badge paid">Active</span></div><div class="card-body"><div style="display:flex;justify-content:space-between;gap:20px;align-items:center;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">Pro plan</h2><p style="margin:0;color:var(--muted)">Unlimited invoices, customer records, PDF exports, and custom branding.</p></div><div style="font-size:34px;font-weight:900">$19<small style="font-size:14px;color:var(--muted)">/month</small></div></div><div style="background:#fff7df;border:1px solid #f0d38f;color:#7d5700;padding:14px;border-radius:11px;margin-top:22px"><strong>Stripe is not connected yet.</strong><br><span class="help" style="color:#7d5700">The interface is ready, but real recurring billing needs a secure server or Stripe Checkout integration.</span></div><button class="btn btn-primary" style="margin-top:18px" data-action="billing-info">Connect Stripe Checkout</button></div></div>`;
+    const account = state.account;
+    if (account.isAdmin) {
+      return `<div class="page-head"><div><h2>Billing</h2><p>Owner access is enabled for this account.</p></div></div><div class="card" style="max-width:760px"><div class="card-head"><h3>Current access</h3><span class="badge paid">Owner</span></div><div class="card-body"><h2 style="margin-top:0">Administrator account</h2><p style="color:var(--muted)">This account bypasses subscription billing and will remain unlocked.</p></div></div>`;
+    }
+    const renewal = account.subscriptionPeriodEnd ? shortDate(String(account.subscriptionPeriodEnd).slice(0,10)) : 'Shown in Stripe';
+    return `<div class="page-head"><div><h2>Billing</h2><p>Manage your recurring Stripe subscription.</p></div></div><div class="card" style="max-width:760px"><div class="card-head"><h3>Current plan</h3><span class="badge paid">${esc(account.subscriptionStatus)}</span></div><div class="card-body"><div style="display:flex;justify-content:space-between;gap:20px;align-items:center;flex-wrap:wrap"><div><h2 style="margin:0 0 6px">${esc(planName)} plan</h2><p style="margin:0;color:var(--muted)">Unlimited invoices, customer records, PDF exports, and custom branding.</p></div><div style="font-size:34px;font-weight:900">${money(planPrice)}<small style="font-size:14px;color:var(--muted)">/month</small></div></div><p class="help" style="margin-top:18px">Current billing period ends: ${esc(renewal)}</p><button class="btn btn-primary" style="margin-top:10px" data-action="manage-billing">Manage subscription</button></div></div>`;
   }
 
   function emptyState(icon,title,text,action,label) {
@@ -724,6 +792,7 @@
       catch (error) { flash(friendlyError(error)); }
       state.account=null; state.page='dashboard'; state.modal=null; render();
     }
+    if (state.account && !state.account.hasAccess && !['logout','start-checkout','manage-billing','refresh-access','close-modal','close-modal-self'].includes(action)) return flash('Activate your subscription to continue');
     if (action === 'mobile-menu') { state.mobileOpen=!state.mobileOpen; render(); }
     if (action === 'nav') { state.page=target.dataset.page; state.mobileOpen=false; state.draft=null; render(); }
     if (action === 'new-invoice') { state.draft=newDraft(); state.page='editor'; state.mobileOpen=false; render(); }
@@ -770,7 +839,9 @@
     }
     if (action === 'print-invoice') { if(state.preview) printInvoice(state.preview); }
     if (action === 'set-color') { const input=document.getElementById('profile-color'); if(input)input.value=target.dataset.color; document.querySelectorAll('.color-choice').forEach(x=>x.classList.toggle('active',x===target)); }
-    if (action === 'billing-info') { alert('Connect this page to Stripe Checkout plus a server-side webhook before charging subscriptions. Never put a Stripe secret key in the website.'); }
+    if (action === 'start-checkout') { try { target.disabled=true; await openBillingSession('create-checkout-session'); } catch (error) { target.disabled=false; flash(friendlyError(error)); } }
+    if (action === 'manage-billing') { try { target.disabled=true; await openBillingSession('create-portal-session'); } catch (error) { target.disabled=false; flash(friendlyError(error)); } }
+    if (action === 'refresh-access') { try { target.disabled=true; await reloadAccount(); history.replaceState({}, '', window.location.pathname); render(); flash(state.account.hasAccess ? 'Subscription active' : 'Stripe has not confirmed access yet'); } catch (error) { target.disabled=false; flash(friendlyError(error)); } }
   });
 
   document.addEventListener('submit', async function (e) {

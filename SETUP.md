@@ -110,3 +110,7 @@ The database and user accounts are ready for a real multi-user MVP. Before a pub
 - transactional email for sending invoices to customers
 
 Stripe secret keys and webhook secrets must be used only in a server or Supabase Edge Function, never in `app.js` or `config.js`.
+
+## Paid subscriptions
+
+This package now includes real Stripe subscription gating. Complete `PAYMENT_SETUP.md` before accepting customers. New users remain locked until Stripe marks their subscription active; your own account can be exempted with `supabase/make-owner-admin.sql`.

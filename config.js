@@ -5,5 +5,7 @@
 */
 window.VERVE_INVOICE_CONFIG = {
   SUPABASE_URL: 'https://fkvwilwijerlabofjmsf.supabase.co',
-  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_LbchC9MBiXWMeSVRXdA4jw_YmaPbOhb'
+  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_LbchC9MBiXWMeSVRXdA4jw_YmaPbOhb',
+  PLAN_NAME: 'Pro',
+  PLAN_PRICE_DOLLARS: 19
 };

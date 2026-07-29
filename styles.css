@@ -454,3 +454,63 @@ tbody tr:hover { background:#fbfcff; }
 .setup-note { padding: 15px 17px; border-radius: 12px; border: 1px solid rgba(111,151,255,.35); background: rgba(79,124,255,.11); color: #dce6ff; line-height: 1.55; }
 .cloud-badge { background:#e9fbf3; color:#16734d; border-color:#a8dfc5; }
 .btn:disabled { opacity:.62; cursor:wait; transform:none; }
+
+
+/* Stripe subscription paywall */
+.single-plan { grid-template-columns:minmax(280px, 430px); justify-content:center; }
+.paywall-page {
+  min-height:100vh;
+  padding:24px;
+  color:#fff;
+  background:
+    radial-gradient(circle at 75% 10%, rgba(79,124,255,.28), transparent 30%),
+    radial-gradient(circle at 10% 85%, rgba(125,85,255,.18), transparent 28%),
+    #07101e;
+}
+.paywall-nav {
+  width:min(1100px, 100%);
+  margin:0 auto;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+}
+.paywall-card {
+  width:min(720px, 100%);
+  margin:70px auto 30px;
+  padding:42px;
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:26px;
+  background:rgba(13,27,48,.94);
+  box-shadow:0 35px 90px rgba(0,0,0,.38);
+}
+.paywall-card h1 { margin:16px 0 10px; font-size:clamp(38px, 7vw, 58px); letter-spacing:-.045em; }
+.paywall-card > p { color:#bdc8d9; line-height:1.65; }
+.paywall-plan {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:24px;
+  margin:28px 0 18px;
+  padding:22px;
+  border:1px solid rgba(133,163,255,.3);
+  border-radius:17px;
+  background:rgba(79,124,255,.1);
+}
+.paywall-plan h2 { margin:0 0 5px; }
+.paywall-plan p { margin:0; color:#bfcbe0; }
+.paywall-price { font-size:34px; font-weight:900; white-space:nowrap; }
+.paywall-price small { display:block; font-size:13px; text-align:right; color:#aeb9ca; }
+.paywall-features { display:grid; grid-template-columns:1fr 1fr; gap:10px 22px; padding:0; margin:20px 0 28px; list-style:none; color:#e6ecf7; }
+.paywall-features li::before { content:'✓'; margin-right:9px; color:#82d9b4; font-weight:900; }
+.paywall-actions { display:flex; flex-wrap:wrap; gap:10px; }
+.billing-notice { padding:14px 16px; border-radius:11px; margin:20px 0; line-height:1.5; }
+.billing-notice.success { color:#c9f5df; border:1px solid rgba(89,202,146,.4); background:rgba(32,154,96,.14); }
+@media (max-width:620px) {
+  .paywall-page { padding:16px; }
+  .paywall-card { margin-top:42px; padding:28px 22px; }
+  .paywall-plan { align-items:flex-start; flex-direction:column; }
+  .paywall-price small { display:inline; margin-left:4px; }
+  .paywall-features { grid-template-columns:1fr; }
+  .paywall-actions .btn { width:100%; }
+}
